@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>أداة دمج مقاطع m3u8 (نسخة الموبايل)</title>
+    
+    <!-- سكريبت لتفعيل SharedArrayBuffer لتجاوز قيود الأمان -->
+    <script src="coi-serviceworker.js"></script>
+    
+    <!-- استدعاء مكتبة ffmpeg.wasm -->
+    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+    
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f7f6;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            background: #fff;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 500px;
+            text-align: center;
+            box-sizing: border-box;
+        }
+        h2 { color: #2c3e50; font-size: 20px; }
+        input[type="file"] {
+            display: block;
+            margin: 20px auto;
+            padding: 10px;
+            border: 2px dashed #bdc3c7;
+            border-radius: 5px;
+            cursor: pointer;
+            width: 90%;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background 0.3s;
+            width: 90%;
+            margin-top: 10px;
+        }
+        button:hover { background-color: #2980b9; }
+        button:disabled { background-color: #95a5a6; cursor: not-allowed; }
+        #status {
+            margin-top: 15px;
+            font-weight: bold;
+            color: #e67e22;
+        }
+        
+        /* تصميم شاشة الكونسول المرئية */
+        .console-container {
+            margin-top: 20px;
+            background: #1e1e1e;
+            color: #00ff00;
+            font-family: monospace;
+            text-align: left;
+            padding: 10px;
+            border-radius: 5px;
+            height: 250px;
+            overflow-y: auto;
+            font-size: 12px;
+            direction: ltr;
+            word-wrap: break-word;
+        }
+        .console-log { margin-bottom: 5px; border-bottom: 1px solid #333; padding-bottom: 2px; }
+        .console-error { color: #ff4c4c; font-weight: bold; margin-bottom: 5px; border-bottom: 1px solid #333; padding-bottom: 2px; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h2>أداة دمج مقاطع (m3u8)</h2>
+        <p>اختر جميع المقاطع المرقمة من داخل المجلد دفعة واحدة.</p>
+        
+        <!-- إدخال لاختيار ملفات متعددة بدون قيود امتداد لتظهر الملفات الرقمية -->
+        <input type="file" id="fileInput" multiple>
+        
+        <button id="processBtn" disabled>بدء الدمج</button>
+        <p id="status">في انتظار اختيار الملفات...</p>
+
+        <!-- شاشة الكونسول -->
+        <div class="console-container" id="visualConsole">
+            <div class="console-log">=== شاشة مراقبة الأخطاء والعمليات ===</div>
+        </div>
+    </div>
+
+    <script>
+        // تحويل أوامر الكونسول لتظهر في الشاشة المرئية
+        const visualConsole = document.getElementById('visualConsole');
+        
+        function logToVisualConsole(message, isError = false) {
+            const div = document.createElement('div');
+            div.className = isError ? 'console-error' : 'console-log';
+            div.innerText = typeof message === 'object' ? JSON.stringify(message) : message;
+            visualConsole.appendChild(div);
+            visualConsole.scrollTop = visualConsole.scrollHeight;
+        }
+
+        const originalLog = console.log;
+        const originalError = console.error;
+
+        console.log = function(...args) {
+            originalLog.apply(console, args);
+            logToVisualConsole(args.join(' '));
+        };
+
+        console.error = function(...args) {
+            originalError.apply(console, args);
+            logToVisualConsole(args.join(' '), true);
+        };
+
+        // الكود الأساسي للأداة
+        const { createFFmpeg, fetchFile } = FFmpeg;
+        const ffmpeg = createFFmpeg({ log: true });
+
+        const fileInput = document.getElementById('fileInput');
+        const processBtn = document.getElementById('processBtn');
+        const statusText = document.getElementById('status');
+        
+        let selectedFiles = [];
+
+        fileInput.addEventListener('change', (event) => {
+            selectedFiles = Array.from(event.target.files);
+            if (selectedFiles.length > 0) {
+                processBtn.disabled = false;
+                statusText.innerText = `تم اختيار ${selectedFiles.length} ملف.`;
+                console.log(`تم التقاط ${selectedFiles.length} ملف بنجاح.`);
+            }
+        });
+
+        processBtn.addEventListener('click', async () => {
+            try {
+                processBtn.disabled = true;
+                
+                statusText.innerText = "جاري تحميل محرك FFmpeg...";
+                console.log("بدء تحميل FFmpeg...");
+                
+                // التحقق من دعم SharedArrayBuffer
+                if (typeof SharedArrayBuffer === 'undefined') {
+                    throw new Error("المتصفح لا يدعم SharedArrayBuffer. تأكد من رفع الملفات على GitHub Pages وتفعيل الخدمة.");
+                }
+
+                if (!ffmpeg.isLoaded()) {
+                    await ffmpeg.load();
+                }
+
+                statusText.innerText = "جاري فرز وترتيب الملفات...";
+                console.log("جاري تصفية وترتيب الملفات الرقمية تصاعدياً...");
+                
+                // تصفية الملفات لتشمل فقط تلك التي يحتوي اسمها على أرقام
+                const mediaFiles = selectedFiles.filter(f => /\d/.test(f.name) && !f.name.endsWith('.m3u8') && !f.name.endsWith('.txt'));
+
+                if (mediaFiles.length === 0) {
+                    throw new Error("لم يتم العثور على ملفات تحتوي على أرقام في أسمائها!");
+                }
+
+                mediaFiles.sort((a, b) => {
+                    const numA = parseInt((a.name.match(/\d+/) || ['0'])[0], 10);
+                    const numB = parseInt((b.name.match(/\d+/) || ['0'])[0], 10);
+                    return numA - numB;
+                });
+
+                statusText.innerText = "جاري تجهيز الملفات في الذاكرة الوهمية...";
+                console.log(`كتابة ${mediaFiles.length} ملف في الذاكرة الوهمية...`);
+                
+                let listContent = "";
+
+                for (let i = 0; i < mediaFiles.length; i++) {
+                    const file = mediaFiles[i];
+                    const fileName = `seg_${i}.ts`; 
+                    ffmpeg.FS('writeFile', fileName, await fetchFile(file));
+                    listContent += `file '${fileName}'\n`;
+                    if (i % 10 === 0 || i === mediaFiles.length - 1) {
+                        console.log(`تمت كتابة الملف الرقمي رقم ${i} باسم وهمي: ${fileName}`);
+                    }
+                }
+
+                ffmpeg.FS('writeFile', 'list.txt', listContent);
+                console.log("تم إنشاء قائمة الدمج (list.txt).");
+
+                statusText.innerText = "جاري دمج المقاطع (يرجى الانتظار ولا تغلق الصفحة)...";
+                console.log("بدء تنفيذ أمر الدمج عبر FFmpeg...");
+
+                await ffmpeg.run('-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', 'output.mp4');
+
+                statusText.innerText = "تم الدمج! جاري استخراج الملف...";
+                console.log("اكتمل الدمج. جاري استخراج ملف MP4...");
+
+                const data = ffmpeg.FS('readFile', 'output.mp4');
+                const blob = new Blob([data.buffer], { type: 'video/mp4' });
+                const url = URL.createObjectURL(blob);
+
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `video_output_${Date.now()}.mp4`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+
+                statusText.innerText = "اكتملت العملية بنجاح!";
+                console.log("تم تحميل الملف النهائي بنجاح!");
+                processBtn.disabled = false;
+
+            } catch (error) {
+                console.error("حدث خطأ فادح:", error.message || error);
+                statusText.innerText = "فشلت العملية. راجع الكونسول بالأسفل لمعرفة السبب.";
+                processBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
