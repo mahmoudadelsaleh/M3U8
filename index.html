@@ -87,6 +87,18 @@
         line-height:1.7;
         margin:0 0 4px;
     }
+    .tolerance-tag{
+        display:inline-flex;
+        align-items:center;
+        gap:6px;
+        margin-top:10px;
+        padding:5px 10px;
+        border-radius:20px;
+        background:var(--teal-dim);
+        color:var(--teal);
+        font-size:11.5px;
+        font-family:'JetBrains Mono', monospace;
+    }
 
     section{padding:18px 28px;}
     .divider{
@@ -230,6 +242,7 @@
         <div class="eyebrow">SEGMENT MERGER · FFMPEG.WASM</div>
         <h1>محطة دمج المقاطع</h1>
         <p class="sub">اختر مجلد المقاطع، وسيتم قبول الملفات المرقمة فقط تلقائياً، ثم دمجها على مراحل وتسمية الناتج باسم المجلد.</p>
+        <div class="tolerance-tag">⛑ يتجاوز الملفات التالفة تلقائياً وينتج الفيديو من الباقي</div>
     </header>
 
     <div class="divider"></div>
@@ -339,6 +352,7 @@
       - لو الملف بلا امتداد أصلاً (شائع في مقاطع TS الخام) يُقبل ويُعامل كملف .ts.
       - لو فيه امتداد، يجب أن يكون ضمن امتدادات الفيديو المعروفة وليس ضمن المستبعدة.
       - أي اسم يخلط أرقاماً وحروفاً (مثل seg001 أو part_12) يُستبعد فوراً.
+      - أي ملف حجمه صفر بايت يُستبعد فوراً (تالف/تحميل غير مكتمل).
     */
     function classifyFile(f) {
         const name = f.name;
@@ -349,6 +363,7 @@
 
         const isPureNumber = /^\d+$/.test(base);
         if (!isPureNumber) return { keep: false, reason: 'يحتوي على حروف' };
+        if (f.size === 0) return { keep: false, reason: 'ملف فارغ (0 بايت)' };
 
         if (!hasExt) return { keep: true, assumedTs: true };
         if (EXCLUDED_EXT.includes(ext)) return { keep: false, reason: 'امتداد مستبعد' };
@@ -389,12 +404,12 @@
 
         fileSummary.style.display = 'block';
         fileSummary.innerHTML =
-            `✅ مقاطع مقبولة: <b>${kept.length}</b> &nbsp;|&nbsp; 🚫 مستبعدة: <b>${excluded.length}</b>` +
+            `✅ مقاطع مقبولة: <b>${kept.length}</b> &nbsp;|&nbsp; 🚫 مستبعدة مسبقاً: <b>${excluded.length}</b>` +
             (gaps.length ? `<div class="warn-line">⚠️ فجوات محتملة في الترقيم: ${gaps.slice(0, 5).join('، ')}${gaps.length > 5 ? ' ...' : ''}</div>` : '');
 
         logToConsole(`تم قبول ${kept.length} مقطع (أرقام فقط) وترتيبها تصاعدياً.`, 'highlight');
         if (excluded.length) {
-            logToConsole(`تم استبعاد ${excluded.length} ملف لاحتوائه على حروف أو امتداد غير مقطعي: ${excluded.slice(0, 10).join(', ')}${excluded.length > 10 ? ' ...' : ''}`, 'warning');
+            logToConsole(`تم استبعاد ${excluded.length} ملف لاحتوائه على حروف/امتداد غير مقطعي/حجم صفري: ${excluded.slice(0, 10).join(', ')}${excluded.length > 10 ? ' ...' : ''}`, 'warning');
         }
         if (gaps.length) {
             logToConsole(`تنبيه: فجوات محتملة في تسلسل الأرقام: ${gaps.join('، ')}`, 'warning');
@@ -427,6 +442,37 @@
     folderModeBtn.addEventListener('click', () => { setMode('folder'); folderInput.click(); });
     filesModeBtn.addEventListener('click', () => { setMode('files'); fileInput.click(); });
 
+    // أعلام التسامح: تجعل FFmpeg يتجاوز الأخطاء الصغيرة/الحزم التالفة بدل التوقف الكامل
+    const TOLERANT_FLAGS = ['-err_detect', 'ignore_err', '-fflags', '+genpts+discardcorrupt', '-avoid_negative_ts', 'make_zero'];
+
+    // يحاول دمج قائمة ملفات إلى ناتج واحد، ويتحقق فعلياً من نجاح إنشاء الملف
+    async function tryConcat(listName, outName) {
+        try { ffmpeg.FS('unlink', outName); } catch (e) {}
+        await ffmpeg.run('-f', 'concat', '-safe', '0', ...TOLERANT_FLAGS, '-i', listName, '-c', 'copy', outName);
+        try {
+            const data = ffmpeg.FS('readFile', outName);
+            return data && data.length > 0;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // يفحص ملفاً منفرداً بمحاولة إعادة تحزيمه؛ يُستخدم فقط عند فشل دمج الدفعة كاملة
+    async function probeFileValid(fileName) {
+        const testOut = 'probe_' + fileName;
+        try { ffmpeg.FS('unlink', testOut); } catch (e) {}
+        try {
+            await ffmpeg.run('-v', 'error', ...TOLERANT_FLAGS, '-i', fileName, '-c', 'copy', '-f', 'mpegts', testOut);
+            const data = ffmpeg.FS('readFile', testOut);
+            const ok = !!(data && data.length > 0);
+            try { ffmpeg.FS('unlink', testOut); } catch (e) {}
+            return ok;
+        } catch (e) {
+            try { ffmpeg.FS('unlink', testOut); } catch (e2) {}
+            return false;
+        }
+    }
+
     processBtn.addEventListener('click', async () => {
         try {
             processBtn.disabled = true;
@@ -445,18 +491,19 @@
 
             logToConsole(`تم تقسيم العمل إلى ${chunks.length} مراحل (دفعات).`, 'highlight');
             const intermediateFiles = [];
+            let totalSkipped = 0;
+            let skippedBatches = 0;
 
             for (let c = 0; c < chunks.length; c++) {
                 const chunk = chunks[c];
                 statusText.innerText = `جاري معالجة المرحلة ${c + 1} من ${chunks.length}...`;
                 logToConsole(`\n>>> بدء المرحلة رقم ${c + 1}...`, 'highlight');
 
-                let listContent = "";
                 const chunkFileNames = [];
+                let listContent = "";
 
                 for (let i = 0; i < chunk.length; i++) {
                     const file = chunk[i];
-                    // كل المقاطع تُكتب بامتداد ts، بغض النظر عن اسمها الأصلي (حتى لو كانت بلا امتداد)
                     const fileName = `chunk_${c}_seg_${i}.ts`;
                     chunkFileNames.push(fileName);
                     ffmpeg.FS('writeFile', fileName, await fetchFile(file));
@@ -464,17 +511,53 @@
                 }
 
                 const listName = `list_${c}.txt`;
+                const outName = `part_${c}.ts`;
                 ffmpeg.FS('writeFile', listName, listContent);
 
-                const outName = `part_${c}.ts`;
-                intermediateFiles.push(outName);
-
                 logToConsole(`جاري دمج المرحلة ${c + 1}... يرجى الانتظار.`);
-                await ffmpeg.run('-f', 'concat', '-safe', '0', '-i', listName, '-c', 'copy', outName);
+                let ok = await tryConcat(listName, outName);
+
+                if (!ok) {
+                    // فشل دمج الدفعة كاملة على الأغلب بسبب ملف واحد لا يمكن فتحه إطلاقاً
+                    logToConsole(`تعذر دمج المرحلة ${c + 1} دفعة واحدة، جاري فحص الملفات لاستبعاد التالف منها...`, 'warning');
+
+                    const goodFiles = [];
+                    for (const fn of chunkFileNames) {
+                        const valid = await probeFileValid(fn);
+                        if (valid) {
+                            goodFiles.push(fn);
+                        } else {
+                            totalSkipped++;
+                            logToConsole(`⏭ تم تجاوز ملف تالف/غير قابل للقراءة: ${fn}`, 'warning');
+                        }
+                    }
+
+                    if (goodFiles.length === 0) {
+                        skippedBatches++;
+                        logToConsole(`تم تجاوز المرحلة ${c + 1} بالكامل لعدم وجود ملفات صالحة فيها.`, 'error');
+                    } else {
+                        const rebuiltList = goodFiles.map(fn => `file '${fn}'\n`).join('');
+                        ffmpeg.FS('writeFile', listName, rebuiltList);
+                        ok = await tryConcat(listName, outName);
+                        if (ok) {
+                            intermediateFiles.push(outName);
+                            logToConsole(`تم إنقاذ المرحلة ${c + 1} بعد استبعاد الملفات التالفة (${goodFiles.length}/${chunkFileNames.length} ملف).`, 'highlight');
+                        } else {
+                            skippedBatches++;
+                            logToConsole(`فشل دمج المرحلة ${c + 1} حتى بعد استبعاد الملفات التالفة، سيتم تجاوزها بالكامل.`, 'error');
+                        }
+                    }
+                } else {
+                    intermediateFiles.push(outName);
+                }
 
                 logToConsole(`جاري تفريغ الذاكرة من ملفات المرحلة ${c + 1} لتقليل الضغط...`);
                 for (const fn of chunkFileNames) { try { ffmpeg.FS('unlink', fn); } catch (e) {} }
                 try { ffmpeg.FS('unlink', listName); } catch (e) {}
+            }
+
+            if (intermediateFiles.length === 0) {
+                throw new Error("فشلت جميع المراحل ولم يُنتج أي جزء صالح للدمج النهائي.");
             }
 
             statusText.innerText = "جاري تجميع المراحل في ملف نهائي...";
@@ -484,7 +567,10 @@
             for (const f of intermediateFiles) finalListContent += `file '${f}'\n`;
             ffmpeg.FS('writeFile', 'final_list.txt', finalListContent);
 
-            await ffmpeg.run('-f', 'concat', '-safe', '0', '-i', 'final_list.txt', '-c', 'copy', 'final_output.mp4');
+            const finalOk = await tryConcat('final_list.txt', 'final_output.mp4');
+            if (!finalOk) {
+                throw new Error("فشل الدمج النهائي حتى بعد تفعيل التسامح مع الأخطاء. راجع رسائل الكونسول أعلاه لمعرفة السبب الدقيق.");
+            }
 
             logToConsole("اكتمل الدمج النهائي! جاري استخراج الملف...", 'highlight');
 
@@ -499,8 +585,9 @@
             a.click();
             document.body.removeChild(a);
 
-            statusText.innerText = `اكتملت العملية بنجاح! تم تحميل الملف باسم "${finalName}.mp4".`;
-            logToConsole("تهانينا، اكتملت المهمة بنجاح!", 'highlight');
+            const skipNote = totalSkipped > 0 ? ` (تم تجاوز ${totalSkipped} ملف تالف${skippedBatches > 0 ? ` و${skippedBatches} دفعة كاملة` : ''})` : '';
+            statusText.innerText = `اكتملت العملية بنجاح! تم تحميل الملف باسم "${finalName}.mp4"${skipNote}.`;
+            logToConsole(`تهانينا، اكتملت المهمة بنجاح!${skipNote}`, 'highlight');
             processBtn.disabled = false;
 
         } catch (error) {
