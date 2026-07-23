@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>أداة دمج m3u8 (النسخة المرحلية المتقدمة)</title>
-    
+    <title>أداة دمج المقاطع (اختيار مجلد + تسمية تلقائية)</title>
+
     <script src="coi-serviceworker.js"></script>
     <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
-    
+
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -25,24 +25,53 @@
             border-radius: 10px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.1);
             width: 100%;
-            max-width: 500px;
+            max-width: 520px;
             text-align: center;
             box-sizing: border-box;
         }
-        h2 { color: #2c3e50; font-size: 20px; }
-        input[type="file"], input[type="number"] {
+        h2 { color: #2c3e50; font-size: 20px; margin-bottom: 5px; }
+        .sub { color: #7f8c8d; font-size: 13px; margin-top: 0; }
+
+        .choice-row {
+            display: flex;
+            gap: 10px;
+            width: 100%;
+            margin: 15px 0 5px;
+        }
+        .choice-btn {
+            flex: 1;
+            background: #ecf0f1;
+            color: #2c3e50;
+            border: 2px solid #bdc3c7;
+            border-radius: 8px;
+            padding: 12px 8px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .choice-btn.active {
+            background: #3498db;
+            color: #fff;
+            border-color: #2980b9;
+        }
+
+        input[type="file"] { display: none; }
+
+        input[type="text"], input[type="number"] {
             display: block;
-            margin: 15px auto;
+            margin: 10px auto;
             padding: 10px;
-            border: 2px dashed #bdc3c7;
+            border: 1px solid #ccc;
             border-radius: 5px;
             width: 90%;
             box-sizing: border-box;
+            font-size: 14px;
         }
-        input[type="number"] { border: 1px solid #ccc; border-style: solid; }
-        .batch-settings { text-align: right; width: 90%; margin: 0 auto; font-size: 14px; }
-        button {
-            background-color: #3498db;
+        .batch-settings { text-align: right; width: 90%; margin: 10px auto 0; font-size: 14px; }
+        .filename-box { text-align: right; width: 90%; margin: 5px auto; font-size: 14px; }
+
+        button.main-btn {
+            background-color: #27ae60;
             color: white;
             border: none;
             padding: 12px 25px;
@@ -51,16 +80,29 @@
             cursor: pointer;
             transition: background 0.3s;
             width: 90%;
-            margin-top: 10px;
+            margin-top: 12px;
         }
-        button:hover { background-color: #2980b9; }
-        button:disabled { background-color: #95a5a6; cursor: not-allowed; }
+        button.main-btn:hover { background-color: #219150; }
+        button.main-btn:disabled { background-color: #95a5a6; cursor: not-allowed; }
+
         #status {
             margin-top: 15px;
             font-weight: bold;
             color: #e67e22;
         }
-        
+
+        #fileSummary {
+            text-align: right;
+            width: 90%;
+            margin: 8px auto 0;
+            font-size: 13px;
+            color: #555;
+            background: #f9f9f9;
+            border-radius: 6px;
+            padding: 8px 10px;
+            display: none;
+        }
+
         .console-container {
             margin-top: 20px;
             background: #1e1e1e;
@@ -78,22 +120,36 @@
         .console-log { margin-bottom: 5px; border-bottom: 1px solid #333; padding-bottom: 2px; }
         .console-error { color: #ff4c4c; font-weight: bold; margin-bottom: 5px; }
         .console-highlight { color: #f1c40f; font-weight: bold; margin-bottom: 5px; }
+        .console-warning { color: #ff9800; margin-bottom: 5px; }
     </style>
 </head>
 <body>
 
     <div class="container">
-        <h2>أداة دمج مقاطع (نظام الدفعات)</h2>
-        <p>اختر جميع المقاطع المرقمة دفعة واحدة، وسيقوم النظام بتقسيمها لتقليل الضغط على الهاتف.</p>
-        
+        <h2>أداة دمج المقاطع (نظام الدفعات)</h2>
+        <p class="sub">تختار الملفات الرقمية التسلسلية تلقائياً من المجلد، وتستبعد أي ملفات أخرى، وتسمي الفيديو النهائي باسم المجلد.</p>
+
+        <div class="choice-row">
+            <button type="button" class="choice-btn active" id="folderModeBtn">📁 اختيار مجلد كامل</button>
+            <button type="button" class="choice-btn" id="filesModeBtn">🗂️ اختيار ملفات يدوياً</button>
+        </div>
+
+        <input type="file" id="folderInput" webkitdirectory directory multiple>
         <input type="file" id="fileInput" multiple>
-        
+
+        <div id="fileSummary"></div>
+
+        <div class="filename-box">
+            <label for="outputName">اسم ملف الفيديو النهائي:</label>
+            <input type="text" id="outputName" placeholder="سيُملأ تلقائياً من اسم المجلد">
+        </div>
+
         <div class="batch-settings">
             <label for="batchSize">عدد الملفات في كل مرحلة (للموبايل يفضل 30 - 40):</label>
             <input type="number" id="batchSize" value="40" min="10" max="100">
         </div>
-        
-        <button id="processBtn" disabled>بدء الدمج المرحلي</button>
+
+        <button class="main-btn" id="processBtn" disabled>بدء الدمج المرحلي</button>
         <p id="status">في انتظار اختيار الملفات...</p>
 
         <div class="console-container" id="visualConsole">
@@ -103,13 +159,14 @@
 
     <script>
         const visualConsole = document.getElementById('visualConsole');
-        
+
         function logToConsole(message, type = 'log') {
             const div = document.createElement('div');
             if (type === 'error') div.className = 'console-error';
             else if (type === 'highlight') div.className = 'console-highlight';
+            else if (type === 'warning') div.className = 'console-warning';
             else div.className = 'console-log';
-            
+
             div.innerText = typeof message === 'object' ? JSON.stringify(message) : message;
             visualConsole.appendChild(div);
             visualConsole.scrollTop = visualConsole.scrollHeight;
@@ -120,9 +177,8 @@
 
         console.log = function(...args) {
             originalLog.apply(console, args);
-            // تصفية السجلات المزعجة لـ FFmpeg لتكون الشاشة أنظف
             const msg = args.join(' ');
-            if(!msg.includes('ffbuild') && !msg.includes('Configuration')) {
+            if (!msg.includes('ffbuild') && !msg.includes('Configuration')) {
                 logToConsole(msg);
             }
         };
@@ -135,42 +191,161 @@
         const { createFFmpeg, fetchFile } = FFmpeg;
         const ffmpeg = createFFmpeg({ log: true });
 
+        const folderInput = document.getElementById('folderInput');
         const fileInput = document.getElementById('fileInput');
+        const folderModeBtn = document.getElementById('folderModeBtn');
+        const filesModeBtn = document.getElementById('filesModeBtn');
         const batchSizeInput = document.getElementById('batchSize');
+        const outputNameInput = document.getElementById('outputName');
         const processBtn = document.getElementById('processBtn');
         const statusText = document.getElementById('status');
-        
-        let selectedFiles = [];
+        const fileSummary = document.getElementById('fileSummary');
 
-        fileInput.addEventListener('change', (event) => {
-            selectedFiles = Array.from(event.target.files);
-            if (selectedFiles.length > 0) {
-                processBtn.disabled = false;
-                statusText.innerText = `تم التقاط ${selectedFiles.length} ملف.`;
-                logToConsole(`تم التقاط ${selectedFiles.length} ملف. مستعد للعمل.`, 'highlight');
+        let selectedFiles = [];
+        let mode = 'folder'; // 'folder' | 'files'
+
+        // امتدادات ملفات الفيديو/المقاطع المقبولة فقط
+        const MEDIA_EXT = ['ts', 'm4s', 'mp4', 'm2ts', 'mpg', 'mpeg', 'aac', 'mp3'];
+        // امتدادات نستبعدها صراحة حتى لو تحتوي على أرقام
+        const EXCLUDED_EXT = ['m3u8', 'txt', 'srt', 'vtt', 'nfo', 'jpg', 'jpeg', 'png', 'gif', 'db', 'json', 'xml'];
+
+        function getExt(name) {
+            const parts = name.split('.');
+            return parts.length > 1 ? parts.pop().toLowerCase() : '';
+        }
+
+        // يستخرج اسم المجلد من مسار الملف (webkitRelativePath) أو من اسم الملف نفسه كخيار احتياطي
+        function extractFolderName(files) {
+            const withPath = files.find(f => f.webkitRelativePath);
+            if (withPath) {
+                return withPath.webkitRelativePath.split('/')[0];
             }
+            return null;
+        }
+
+        // ينظّف اسم الملف من أي أحرف غير صالحة في نظام الملفات
+        function sanitizeFileName(name) {
+            return name.replace(/[\\/:*?"<>|]/g, '').trim() || 'الفيديو_النهائي';
+        }
+
+        // يفلتر الملفات ليبقي فقط المقاطع الرقمية التسلسلية، ويستبعد أي شيء آخر
+        function filterSequentialMediaFiles(files) {
+            const kept = [];
+            const excluded = [];
+
+            for (const f of files) {
+                const ext = getExt(f.name);
+                const base = f.name.slice(0, f.name.length - ext.length - 1);
+                const hasNumber = /\d+/.test(base);
+
+                if (EXCLUDED_EXT.includes(ext) || !MEDIA_EXT.includes(ext) || !hasNumber) {
+                    excluded.push(f.name);
+                    continue;
+                }
+                kept.push(f);
+            }
+
+            kept.sort((a, b) => {
+                const numA = parseInt((a.name.match(/\d+/) || ['0'])[0], 10);
+                const numB = parseInt((b.name.match(/\d+/) || ['0'])[0], 10);
+                return numA - numB;
+            });
+
+            return { kept, excluded };
+        }
+
+        function updateSummary() {
+            const { kept, excluded } = filterSequentialMediaFiles(selectedFiles);
+
+            if (kept.length === 0) {
+                fileSummary.style.display = 'none';
+                processBtn.disabled = true;
+                statusText.innerText = 'لم يتم العثور على مقاطع رقمية صالحة ضمن ما تم اختياره.';
+                return;
+            }
+
+            // كشف الفجوات في الترقيم (تحذير فقط، لا يمنع المتابعة)
+            const numbers = kept.map(f => parseInt((f.name.match(/\d+/) || ['0'])[0], 10));
+            const gaps = [];
+            for (let i = 1; i < numbers.length; i++) {
+                if (numbers[i] - numbers[i - 1] > 1) {
+                    gaps.push(`بين ${numbers[i - 1]} و ${numbers[i]}`);
+                }
+            }
+
+            fileSummary.style.display = 'block';
+            fileSummary.innerHTML =
+                `✅ عدد المقاطع المقبولة: <b>${kept.length}</b><br>` +
+                `🚫 عدد الملفات المستبعدة: <b>${excluded.length}</b>` +
+                (gaps.length ? `<br>⚠️ فجوات محتملة في الترقيم: ${gaps.slice(0, 5).join('، ')}${gaps.length > 5 ? ' ...' : ''}` : '');
+
+            logToConsole(`تم قبول ${kept.length} مقطع وترتيبها تصاعدياً حسب الرقم.`, 'highlight');
+            if (excluded.length) {
+                logToConsole(`تم استبعاد ${excluded.length} ملف لا يطابق نمط المقاطع الرقمية: ${excluded.slice(0, 10).join(', ')}${excluded.length > 10 ? ' ...' : ''}`, 'warning');
+            }
+            if (gaps.length) {
+                logToConsole(`تنبيه: يوجد فجوات محتملة في تسلسل الأرقام (قد تكون ملفات ناقصة): ${gaps.join('، ')}`, 'warning');
+            }
+
+            processBtn.disabled = false;
+            statusText.innerText = `جاهز للدمج (${kept.length} مقطع).`;
+
+            // تسمية الملف تلقائياً من اسم المجلد إن لم يقم المستخدم بتعديله يدوياً
+            if (!outputNameInput.dataset.userEdited) {
+                const folderName = extractFolderName(selectedFiles);
+                outputNameInput.value = folderName ? sanitizeFileName(folderName) : 'الفيديو_النهائي';
+            }
+        }
+
+        function handleSelection(files) {
+            selectedFiles = Array.from(files);
+            if (selectedFiles.length === 0) return;
+            logToConsole(`تم التقاط ${selectedFiles.length} عنصر من الاختيار. جاري الفرز والتصفية...`, 'highlight');
+            updateSummary();
+        }
+
+        folderInput.addEventListener('change', (e) => handleSelection(e.target.files));
+        fileInput.addEventListener('change', (e) => handleSelection(e.target.files));
+
+        outputNameInput.addEventListener('input', () => {
+            outputNameInput.dataset.userEdited = 'true';
+        });
+
+        function setMode(newMode) {
+            mode = newMode;
+            if (mode === 'folder') {
+                folderModeBtn.classList.add('active');
+                filesModeBtn.classList.remove('active');
+            } else {
+                filesModeBtn.classList.add('active');
+                folderModeBtn.classList.remove('active');
+            }
+        }
+
+        folderModeBtn.addEventListener('click', () => {
+            setMode('folder');
+            folderInput.click();
+        });
+
+        filesModeBtn.addEventListener('click', () => {
+            setMode('files');
+            fileInput.click();
         });
 
         processBtn.addEventListener('click', async () => {
             try {
                 processBtn.disabled = true;
                 const batchSize = parseInt(batchSizeInput.value) || 40;
-                
+                const finalName = sanitizeFileName(outputNameInput.value || 'الفيديو_النهائي');
+
                 logToConsole("بدء تحميل FFmpeg...", 'highlight');
                 if (typeof SharedArrayBuffer === 'undefined') {
                     throw new Error("المتصفح لا يدعم SharedArrayBuffer.");
                 }
                 if (!ffmpeg.isLoaded()) await ffmpeg.load();
 
-                // التصفية والترتيب
-                const mediaFiles = selectedFiles.filter(f => /\d/.test(f.name) && !f.name.endsWith('.m3u8') && !f.name.endsWith('.txt'));
+                const { kept: mediaFiles } = filterSequentialMediaFiles(selectedFiles);
                 if (mediaFiles.length === 0) throw new Error("لم يتم العثور على مقاطع!");
-
-                mediaFiles.sort((a, b) => {
-                    const numA = parseInt((a.name.match(/\d+/) || ['0'])[0], 10);
-                    const numB = parseInt((b.name.match(/\d+/) || ['0'])[0], 10);
-                    return numA - numB;
-                });
 
                 // تقسيم الملفات إلى دفعات (Chunks)
                 const chunks = [];
@@ -186,46 +361,44 @@
                     const chunk = chunks[c];
                     statusText.innerText = `جاري معالجة المرحلة ${c + 1} من ${chunks.length}...`;
                     logToConsole(`\n>>> بدء المرحلة رقم ${c + 1}...`, 'highlight');
-                    
+
                     let listContent = "";
                     const chunkFileNames = [];
-                    
-                    // كتابة ملفات المرحلة الحالية فقط في الذاكرة
+
                     for (let i = 0; i < chunk.length; i++) {
                         const file = chunk[i];
-                        const fileName = `chunk_${c}_seg_${i}.ts`; 
+                        const fileName = `chunk_${c}_seg_${i}.ts`;
                         chunkFileNames.push(fileName);
                         ffmpeg.FS('writeFile', fileName, await fetchFile(file));
                         listContent += `file '${fileName}'\n`;
                     }
-                    
+
                     const listName = `list_${c}.txt`;
                     ffmpeg.FS('writeFile', listName, listContent);
-                    
-                    const outName = `part_${c}.ts`; // الحفظ بصيغة ts مؤقتاً لضمان دمج سليم للنهاية
+
+                    const outName = `part_${c}.ts`;
                     intermediateFiles.push(outName);
-                    
+
                     logToConsole(`جاري دمج المرحلة ${c + 1}... يرجى الانتظار.`);
                     await ffmpeg.run('-f', 'concat', '-safe', '0', '-i', listName, '-c', 'copy', outName);
-                    
-                    // تنظيف الذاكرة الوهمية (أهم خطوة للموبايل)
+
                     logToConsole(`جاري تفريغ الذاكرة من ملفات المرحلة ${c + 1} لتقليل الضغط...`);
                     for (const fn of chunkFileNames) {
-                        try { ffmpeg.FS('unlink', fn); } catch(e){}
+                        try { ffmpeg.FS('unlink', fn); } catch (e) {}
                     }
-                    try { ffmpeg.FS('unlink', listName); } catch(e){}
+                    try { ffmpeg.FS('unlink', listName); } catch (e) {}
                 }
 
                 // الدمج النهائي
                 statusText.innerText = "جاري تجميع المراحل في ملف نهائي...";
                 logToConsole("\n>>> بدء مرحلة الدمج النهائي...", 'highlight');
-                
+
                 let finalListContent = "";
                 for (const f of intermediateFiles) {
                     finalListContent += `file '${f}'\n`;
                 }
                 ffmpeg.FS('writeFile', 'final_list.txt', finalListContent);
-                
+
                 await ffmpeg.run('-f', 'concat', '-safe', '0', '-i', 'final_list.txt', '-c', 'copy', 'final_output.mp4');
 
                 logToConsole("اكتمل الدمج النهائي! جاري استخراج الملف...", 'highlight');
@@ -236,12 +409,12 @@
 
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `Full_Video_${Date.now()}.mp4`;
+                a.download = `${finalName}.mp4`;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
 
-                statusText.innerText = "اكتملت العملية بنجاح! تم تحميل الفيديو النهائي.";
+                statusText.innerText = `اكتملت العملية بنجاح! تم تحميل الملف باسم "${finalName}.mp4".`;
                 logToConsole("تهانينا، اكتملت المهمة بنجاح!", 'highlight');
                 processBtn.disabled = false;
 
